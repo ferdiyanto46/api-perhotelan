@@ -16,3 +16,13 @@
 $router->get('/', function () use ($router) {
     return $router->app->version();
 });
+
+$router->get('/hotels', 'HotelController@index');
+$router->get('/hotels/{id}', 'HotelController@show');
+$router->get('/room-types', 'HotelController@roomTypes');
+$router->get('/room-types/{id}', 'HotelController@roomTypeDetail');
+
+$router->post('/bookings', 'BookingController@checkout');
+$router->get('/bookings', 'BookingController@index');
+$router->get('/bookings/{id}', 'BookingController@show');
+$router->post('/midtrans/notification', 'BookingController@handleNotification');
