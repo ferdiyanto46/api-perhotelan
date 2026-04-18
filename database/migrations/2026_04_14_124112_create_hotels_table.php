@@ -18,7 +18,7 @@ return new class extends Migration
             $table->text('address');
             $table->text('description');
             $table->decimal('rating',2,1)->nullable();
-            $table->string('img_url');
+            $table->string('img_url')->nullable();
             $table->timestamps();
         });
     }
