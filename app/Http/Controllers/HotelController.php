@@ -18,11 +18,56 @@ class HotelController extends Controller
 {
     
     public function index()
-{
+    {
         $hotels = Hotel::all();
+
         return response()->json([
             'success' => true,
             'message' => 'List Semua Hotel',
+            'data' => $hotels,
+        ], 200);
+    }
+
+    public function showById($id)
+    {
+        $hotels = Hotel::find($id);
+
+        if(!$hotels){
+            return response()->json([
+                'success' => false,
+                'massage' => 'hotel tidak ditemukan',
+            ],404);
+        }
+
+        return response()->json($hotels, 200);
+    }
+    
+    public function search(Request $request)
+    {
+        $query = $request->query('q');
+
+        if (!$query) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Parameter pencarian (q) diperlukan',
+            ], 422);
+        }
+
+        $hotels = Hotel::where('address', 'like', "%{$query}%")
+            ->orWhere('city', 'like', "%{$query}%")
+            ->orWhere('name', 'like', "%{$query}%")
+            ->get();
+
+        if ($hotels->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Hotel tidak ditemukan',
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Hasil pencarian hotel',
             'data' => $hotels,
         ], 200);
     }
