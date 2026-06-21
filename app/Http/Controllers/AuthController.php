@@ -43,13 +43,15 @@ class AuthController extends BaseController
         // Gunakan guard 'api' secara eksplisit
         if ($token = auth('api')->attempt($credentials)) {
             $user = auth('api')->user();
+            /** @var \Tymon\JWTAuth\JWTGuard $auth */
+            $auth = auth('api');
 
             return response()->json([
                 'message' => 'Login successful',
                 'user' => $user,
                 'token' => $token,
                 'token_type' => 'Bearer',
-                'expires_in' => auth('api')->factory()->getTTL() * 60
+                'expires_in' => $auth->factory()->getTTL() * 60
             ]);
         }
 
