@@ -1,36 +1,44 @@
 <?php
+
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Booking extends Model
 {
-    protected $table = 'bookings';
-    
     protected $fillable = [
-        'user_id', 'room_id', 'check_in','check_out', 'total_price', 'status'
+        'user_id', 'room_id', 'check_in', 'check_out',
+        'total_price', 'status',
     ];
 
+    protected $casts = [
+        'check_in'    => 'date',
+        'check_out'   => 'date',
+        'total_price' => 'decimal:2',
+    ];
 
-
-    public function user()
+    public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
     }
-    public function room()
+
+    public function room(): BelongsTo
     {
         return $this->belongsTo(Room::class);
     }
 
-    public function payments()
+    public function payment(): HasOne
     {
         return $this->hasOne(Payment::class);
     }
 
-    public function calculateTotalDays($check_in, $check_out)
+    /**
+     * Accessor: hitung jumlah malam berdasarkan check_in & check_out.
+     */
+    public function getNightsAttribute(): int
     {
-        $date1 = new \DateTime($check_in);
-        $date2 = new \DateTime($check_out);
-        return $date2->diff($date1)->format("%a");
+        return $this->check_in->diffInDays($this->check_out);
     }
 }

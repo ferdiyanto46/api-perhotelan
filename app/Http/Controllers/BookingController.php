@@ -2,172 +2,207 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Payment;
-use Illuminate\Http\Request;
 use App\Models\Booking;
+use App\Models\Payment;
 use App\Models\Room;
-use App\Models\RoomType;
-use Midtrans\Config;
-use Midtrans\Snap;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Laravel\Lumen\Routing\Controller as BaseController;
 
-class BookingController extends Controller
+class BookingController extends BaseController
 {
-    public function __construct()
-    {
-        // Konfigurasi Midtrans
-        Config::$serverKey = env('MIDTRANS_SERVER_KEY');
-        Config::$isProduction = env('MIDTRANS_IS_PRODUCTION', false);
-        Config::$isSanitized = true;
-        Config::$is3ds = true;
-    }
-
-    public function checkout(Request $request)
-    {
-        // 1. Validasi Input
-        $rules = [
-            'room_type_id' => 'required|exists:room_types,id',
-            'check_in' => 'required|date|after_or_equal:today',
-            'check_out' => 'required|date|after:check_in',
-        ];
-
-        if (!$request->user()) {
-            $rules['user_id'] = 'required|exists:users,id';
-        }
-
-        $this->validate($request, $rules);
-
-        // 2. Cari Kamar yang Tersedia (Status: available)
-        $room = Room::where('room_type_id', $request->room_type_id)
-                    ->where('status', 'available')
-                    ->first();
-
-        if (!$room) {
-            return response()->json(['message' => 'Maaf, kamar tipe ini sudah penuh.'], 404);
-        }
-
-        // 3. Hitung Total Harga
-        $roomType = RoomType::find($request->room_type_id);
-        $days = (new Booking)->calculateTotalDays($request->check_in, $request->check_out);
-        $totalPrice = $days * $roomType->price_per_night;
-
-        $userId = $request->user() ? $request->user()->id : $request->user_id;
-        $userName = $request->user() ? $request->user()->name : null;
-        $userEmail = $request->user() ? $request->user()->email : null;
-
-        // 4. Simpan Data ke Tabel Bookings (Status: pending)
-        $booking = Booking::create([
-            'user_id' => $userId,
-            'room_id' => $room->id,
-            'check_in' => $request->check_in,
-            'check_out' => $request->check_out,
-            'total_price' => $totalPrice,
-            'status' => 'pending'
-        ]);
-
-        // 5. Buat Parameter untuk Midtrans
-        $params = [
-            'transaction_details' => [
-                'order_id' => 'INV-' . $booking->id . '-' . time(),
-                'gross_amount' => (int) $totalPrice,
-            ],
-            'customer_details' => [
-                'first_name' => $userName,
-                'email' => $userEmail,
-            ],
-        ];
-
-        // 6. Dapatkan Snap Token dari Midtrans
-        try {
-            $snapToken = Snap::getSnapToken($params);
-            
-            return response()->json([
-                'status' => 'success',
-                'booking_id' => $booking->id,
-                'snap_token' => $snapToken
-            ]);
-        } catch (\Exception $e) {
-            return response()->json(['message' => $e->getMessage()], 500);
-        }
-    }
-
+    /**
+     * Tampilkan daftar booking.
+     * Admin melihat semua booking; customer hanya melihat booking miliknya.
+     */
     public function index(Request $request)
     {
-        $query = Booking::with(['user', 'room.roomType', 'payments']);
+        $user = $request->user();
 
-        if ($request->has('user_id')) {
-            $query->where('user_id', $request->user_id);
+        if ($user->isSuperAdmin()) {
+            // Super Admin: lihat semua booking
+            $query = Booking::with(['user', 'room.roomType.hotel', 'payment']);
+        } elseif ($user->isAdmin()) {
+            // Admin hotel: hanya lihat booking di hotel miliknya
+            $query = Booking::with(['user', 'room.roomType.hotel', 'payment'])
+                ->whereHas('room.roomType', function ($q) use ($user) {
+                    $q->where('hotel_id', $user->hotel_id);
+                });
+        } else {
+            // Customer: hanya lihat booking miliknya sendiri
+            $query = $user->bookings()->with(['room.roomType.hotel', 'payment']);
         }
 
-        return response()->json($query->get());
+        $bookings = $query->paginate(10);
+
+        return response()->json($bookings);
     }
 
+    /**
+     * Tampilkan detail booking berdasarkan ID.
+     * Admin bisa melihat semua; customer hanya miliknya.
+     */
     public function show($id)
     {
-        $booking = Booking::with(['user', 'room.roomType', 'payments'])->find($id);
+        $user  = request()->user();
+        $query = Booking::with(['room.roomType.hotel', 'payment']);
 
-        if (!$booking) {
-            return response()->json(['message' => 'Booking tidak ditemukan'], 404);
+        if ($user->isSuperAdmin()) {
+            // Super Admin: akses semua booking
+        } elseif ($user->isAdmin()) {
+            // Admin hotel: hanya booking di hotel miliknya
+            $query->whereHas('room.roomType', function ($q) use ($user) {
+                $q->where('hotel_id', $user->hotel_id);
+            });
+        } else {
+            // Customer: hanya booking miliknya sendiri
+            $query->where('user_id', $user->id);
         }
+
+        $booking = $query->findOrFail($id);
 
         return response()->json($booking);
     }
 
-    public function handleNotification(Request $request)
+    /**
+     * Buat booking baru, simpan ke DB, lalu minta Snap Token dari Midtrans.
+     */
+    public function checkout(Request $request)
     {
-    // 1. Inisialisasi Notifikasi dari Midtrans
-    $notif = new \Midtrans\Notification();
+        $this->validate($request, [
+            'room_id'        => 'required|exists:rooms,id',
+            'check_in'       => 'required|date|after_or_equal:today',
+            'check_out'      => 'required|date|after:check_in',
+            'payment_method' => 'required|string',
+        ]);
 
-    $transaction = $notif->transaction_status;
-    $type = $notif->payment_type;
-    $orderId = $notif->order_id; // Format: INV-{booking_id}-{timestamp}
-    $fraud = $notif->fraud_status;
+        $user = $request->user();
+        $room = Room::with('roomType.hotel')->findOrFail($request->room_id);
 
-    // Ambil Booking ID dari string order_id
-    $explodedOrderId = explode('-', $orderId);
-    $bookingId = $explodedOrderId[1];
+        // Cek ketersediaan kamar di tanggal yang diminta
+        if (!$room->isAvailable($request->check_in, $request->check_out)) {
+            return response()->json([
+                'message' => 'Room is not available for selected dates',
+            ], 422);
+        }
 
-    $booking = Booking::find($bookingId);
-    if (!$booking) {
-        return response()->json(['message' => 'Booking tidak ditemukan'], 404);
+        // Hitung total harga
+        $checkIn    = new \DateTime($request->check_in);
+        $checkOut   = new \DateTime($request->check_out);
+        $nights     = $checkIn->diff($checkOut)->days;
+        $totalPrice = $room->price * $nights;
+
+        DB::beginTransaction();
+
+        try {
+            // Simpan data booking
+            $booking = Booking::create([
+                'user_id'     => $user->id,
+                'room_id'     => $room->id,
+                'check_in'    => $request->check_in,
+                'check_out'   => $request->check_out,
+                'total_price' => $totalPrice,
+                'status'      => 'pending',
+            ]);
+
+            // Simpan data pembayaran awal (status: pending)
+            $payment = Payment::create([
+                'booking_id'     => $booking->id,
+                'external_id'    => 'BOOK-' . time() . '-' . $booking->id,
+                'payment_method' => $request->payment_method,
+                'amount'         => $totalPrice,
+                'status'         => 'pending',
+                'raw_response'   => null,
+            ]);
+
+            DB::commit();
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'message' => 'Failed to create booking',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+
+        // ── Konfigurasi Midtrans (di luar transaksi DB) ───────────────────────
+        \Midtrans\Config::$serverKey    = env('MIDTRANS_SERVER_KEY');
+        \Midtrans\Config::$isProduction = env('MIDTRANS_IS_PRODUCTION', false);
+        \Midtrans\Config::$isSanitized  = true;
+        \Midtrans\Config::$is3ds        = true;
+
+        // ── Buat parameter transaksi untuk Midtrans ───────────────────────────
+        $snapParams = [
+            'transaction_details' => [
+                'order_id'     => $payment->external_id,  // ID unik per transaksi
+                'gross_amount' => (int) $totalPrice,       // Integer, dalam Rupiah
+            ],
+            'customer_details'    => [
+                'first_name' => $user->name,
+                'email'      => $user->email,
+            ],
+            'item_details'        => [
+                [
+                    'id'       => 'ROOM-' . $room->id,
+                    'price'    => (int) $room->price,
+                    'quantity' => $nights,
+                    'name'     => ($room->roomType->name ?? 'Kamar')
+                                  . ' - ' . ($room->roomType->hotel->name ?? ''),
+                ],
+            ],
+        ];
+
+        // ── Minta Snap Token ke server Midtrans ───────────────────────────────
+        try {
+            $snapToken = \Midtrans\Snap::getSnapToken($snapParams);
+        } catch (\Exception $e) {
+            // Booking sudah tersimpan, tapi gagal ambil snap token
+            // Kembalikan info booking agar frontend bisa retry
+            return response()->json([
+                'message'    => 'Booking created but failed to get payment token',
+                'booking'    => $booking->load(['room.roomType.hotel', 'payment']),
+                'snap_token' => null,
+                'error'      => $e->getMessage(),
+            ], 502);
+        }
+
+        return response()->json([
+            'message'    => 'Booking created successfully',
+            'booking'    => $booking->load(['room.roomType.hotel', 'payment']),
+            'snap_token' => $snapToken, // Kirim ke frontend → snap.pay(snap_token)
+        ], 201);
     }
 
-    // 2. Logika Update Status dengan Database Transaction agar Aman
-    DB::transaction(function () use ($notif, $transaction, $booking, $type) {
-        
-        // Simpan data ke tabel payments
-        Payment::updateOrCreate(
-            ['external_id' => $notif->transaction_id],
-            [
-                'booking_id' => $booking->id,
-                'payment_method' => $type,
-                'amount' => $notif->gross_amount,
-                'status' => $transaction,
-                'raw_response' => json_encode($notif)
-            ]
-        );
+    /**
+     * Handle webhook notifikasi dari Midtrans.
+     */
+    public function handleNotification(Request $request)
+    {
+        $payload = $request->all();
 
-        // Update status di tabel bookings dan rooms berdasarkan status transaksi Midtrans
-        if ($transaction == 'settlement' || $transaction == 'capture') {
-            $booking->update(['status' => 'paid']);
-            
-            $room = Room::find($booking->room_id);
-            if ($room) {
-                $room->update(['status' => 'occupied']);
+        DB::beginTransaction();
+
+        try {
+            $payment = Payment::where('external_id', $payload['order_id'])->firstOrFail();
+
+            $payment->update([
+                'status'       => $payload['transaction_status'],
+                'raw_response' => $payload,
+            ]);
+
+            if (in_array($payload['transaction_status'], ['capture', 'settlement'])) {
+                $payment->markAsPaid();
+            } elseif (in_array($payload['transaction_status'], ['deny', 'expire', 'cancel'])) {
+                $payment->markAsFailed();
             }
 
-        } elseif ($transaction == 'pending') {
-            $booking->update(['status' => 'pending']);
-        } elseif ($transaction == 'deny' || $transaction == 'expire' || $transaction == 'cancel') {
-            $booking->update(['status' => 'failed']);
-            
-            $room = Room::find($booking->room_id);
-            if ($room) {
-                $room->update(['status' => 'available']);
-            }
+            DB::commit();
+
+            return response()->json(['message' => 'Notification handled successfully']);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['message' => 'Failed to handle notification'], 500);
         }
-    });
-
-    return response()->json(['message' => 'Notification handled successfully']);
-}
+    }
 }

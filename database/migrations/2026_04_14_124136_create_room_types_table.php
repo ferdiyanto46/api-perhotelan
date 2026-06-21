@@ -17,8 +17,8 @@ return new class extends Migration
             $table->string('name');
             $table->integer('capacity');
             $table->text('facilities')->nullable();
-            $table->decimal('price_per_night',10,2);
-            $table->string('img_url');
+            $table->decimal('price_per_night', 10, 2);
+            $table->string('img_url')->nullable(); // Nullable: tidak wajib ada gambar
             $table->timestamps();
         });
     }

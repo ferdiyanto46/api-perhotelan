@@ -6,36 +6,20 @@ use App\Models\RoomType;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
+use Laravel\Lumen\Routing\Controller as BaseController;
 
-class RoomTypeController extends Controller
+class RoomTypeController extends BaseController
 {
     public function index()
     {
-        $roomTypes = RoomType::with('hotel')->get();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'List Semua Room Type',
-            'data' => $roomTypes,
-        ], 200);
+        $roomTypes = RoomType::with('hotel')->paginate(10);
+        return response()->json($roomTypes);
     }
 
     public function show($id)
     {
-        $roomType = RoomType::with('hotel')->find($id);
-
-        if (!$roomType) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Room Type tidak ditemukan',
-            ], 404);
-        }
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Detail Room Type',
-            'data' => $roomType,
-        ], 200);
+        $roomType = RoomType::with(['hotel', 'rooms'])->findOrFail($id);
+        return response()->json($roomType);
     }
 
     public function store(Request $request)
@@ -54,6 +38,15 @@ class RoomTypeController extends Controller
                 'message' => 'Validasi gagal',
                 'data' => $validator->errors(),
             ], 422);
+        }
+
+        // Cek kepemilikan: admin hanya bisa tambah tipe kamar di hotel miliknya
+        $user = $request->user();
+        if (!$user->ownsHotel($request->input('hotel_id'))) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Anda tidak memiliki akses untuk mengelola hotel ini',
+            ], 403);
         }
 
         $imgUrl = '';
@@ -88,6 +81,15 @@ class RoomTypeController extends Controller
                 'success' => false,
                 'message' => 'Room Type tidak ditemukan',
             ], 404);
+        }
+
+        // Cek kepemilikan: admin hanya bisa edit tipe kamar di hotel miliknya
+        $user = $request->user();
+        if (!$user->ownsHotel($roomType->hotel_id)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Anda tidak memiliki akses untuk mengelola tipe kamar ini',
+            ], 403);
         }
 
         $validator = Validator::make($request->all(), [
@@ -127,27 +129,23 @@ class RoomTypeController extends Controller
         ], 200);
     }
 
-    public function destroy($id)
+    public function destroy(Request $request, $id)
     {
-        $roomType = RoomType::find($id);
+        $roomType = RoomType::findOrFail($id);
 
-        if (!$roomType) {
+        // Cek kepemilikan: admin hanya bisa hapus tipe kamar di hotel miliknya
+        $user = $request->user();
+        if (!$user->ownsHotel($roomType->hotel_id)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Room Type tidak ditemukan',
-            ], 404);
-        }
-
-        // Hapus gambar jika ada
-        if ($roomType->img_url) {
-            Storage::delete(str_replace('/storage', 'public', $roomType->img_url));
+                'message' => 'Anda tidak memiliki akses untuk menghapus tipe kamar ini',
+            ], 403);
         }
 
         $roomType->delete();
 
         return response()->json([
-            'success' => true,
-            'message' => 'Room Type berhasil dihapus',
-        ], 200);
+            'message' => 'Room type deleted successfully'
+        ]);
     }
 }

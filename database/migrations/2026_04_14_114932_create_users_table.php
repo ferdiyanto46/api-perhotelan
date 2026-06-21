@@ -16,6 +16,7 @@ return new class extends Migration
             $table->string('name');
             $table->string('email')->unique();
             $table->string('password');
+            $table->enum('role', ['super-admin', 'admin', 'customer'])->default('customer'); // Tambahkan kolom role
             $table->rememberToken();
             $table->timestamps();
         });

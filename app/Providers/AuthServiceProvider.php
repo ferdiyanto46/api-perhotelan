@@ -31,9 +31,8 @@ class AuthServiceProvider extends ServiceProvider
         // the User instance via an API token or any other method necessary.
 
         $this->app['auth']->viaRequest('api', function ($request) {
-            if ($request->input('api_token')) {
-                return User::where('api_token', $request->input('api_token'))->first();
-            }
+            // Logika autentikasi JWT akan ditangani oleh package,
+            // jadi kita bisa biarkan ini kosong atau hapus.
         });
     }
 }

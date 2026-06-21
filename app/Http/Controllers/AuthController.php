@@ -3,39 +3,31 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
-use App\Models\Role;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Auth;
+use Laravel\Lumen\Routing\Controller as BaseController;
 
-class AuthController extends Controller
+class AuthController extends BaseController
 {
     public function register(Request $request)
     {
         $this->validate($request, [
-            'name' => 'required|string',
+            'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users',
-            'password' => 'required|confirmed|min:6',
+            'password' => 'required|string|min:6',
         ]);
 
-        // 1. Simpan User baru
+        // Default role for new registrations is 'customer'
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
             'password' => Hash::make($request->password),
+            'role' => 'customer', 
         ]);
 
-        // 2. Cari Role 'customer'
-        $customerRole = Role::where('name', 'customer')->first();
-
-        // 3. Hubungkan User ke Role melalui tabel pivot role_user
-        if ($customerRole) {
-            $user->roles()->attach($customerRole->id);
-        }
-
         return response()->json([
-            'message' => 'Registrasi berhasil!',
-            'user' => $user->with('roles')->find($user->id)
+            'message' => 'User registered successfully',
+            'user' => $user
         ], 201);
     }
 
@@ -46,23 +38,52 @@ class AuthController extends Controller
             'password' => 'required',
         ]);
 
-        $credentials = $request->only(['email', 'password']);
+        $credentials = $request->only('email', 'password');
 
-        // Mencoba login dan generate token
-        if (! $token = Auth::attempt($credentials)) {
-            return response()->json(['message' => 'Email atau Password salah'], 401);
+        // Gunakan guard 'api' secara eksplisit
+        if ($token = auth('api')->attempt($credentials)) {
+            $user = auth('api')->user();
+
+            return response()->json([
+                'message' => 'Login successful',
+                'user' => $user,
+                'token' => $token,
+                'token_type' => 'Bearer',
+                'expires_in' => auth('api')->factory()->getTTL() * 60
+            ]);
         }
 
-        return $this->respondWithToken($token);
+        return response()->json(['message' => 'Invalid credentials'], 401);
     }
 
-    protected function respondWithToken($token)
+    public function registerAdmin(Request $request)
     {
-        return response()->json([
-            'access_token' => $token,
-            'token_type' => 'bearer',
-            'user' => Auth::user()->load('roles'), // Sertakan info role di respon
-            'expires_in' => Auth::factory()->getTTL() * 60
+        $this->validate($request, [
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users',
+            'password' => 'required|string|min:6',
+            'role' => 'required|in:admin,super-admin',
+            'hotel_id' => 'nullable|exists:hotels,id',
         ]);
+
+        // Jika role admin, hotel_id wajib diisi
+        if ($request->role === 'admin' && !$request->hotel_id) {
+            return response()->json([
+                'message' => 'hotel_id wajib diisi untuk role admin',
+            ], 422);
+        }
+
+        $user = User::create([
+            'name' => $request->name,
+            'email' => $request->email,
+            'password' => Hash::make($request->password),
+            'role' => $request->role,
+            'hotel_id' => $request->role === 'admin' ? $request->hotel_id : null,
+        ]);
+
+        return response()->json([
+            'message' => 'Admin registered successfully',
+            'user' => $user
+        ], 201);
     }
 }

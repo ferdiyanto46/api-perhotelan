@@ -15,7 +15,10 @@ return new class extends Migration
             $table->id();
             $table->foreignId('room_type_id')->constrained()->onDelete('cascade');
             $table->string('room_number');
-            $table->enum('status',['available','occupied','maintenance'])->default('available');
+            $table->enum('status', ['available', 'occupied', 'maintenance'])->default('available');
+            $table->text('description')->nullable();
+            $table->decimal('price', 10, 2)->default(0);
+            $table->string('img_url')->nullable();
             $table->timestamps();
         });
     }

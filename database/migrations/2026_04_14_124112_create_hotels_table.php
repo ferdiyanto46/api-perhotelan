@@ -16,8 +16,8 @@ return new class extends Migration
             $table->string('name');
             $table->string('city');
             $table->text('address');
-            $table->text('description');
-            $table->decimal('rating',2,1)->nullable();
+            $table->text('description')->nullable(); // Nullable: opsional saat store
+            $table->decimal('rating', 2, 1)->nullable();
             $table->string('img_url')->nullable();
             $table->timestamps();
         });
