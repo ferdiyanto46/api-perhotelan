@@ -49,6 +49,12 @@ $router->group(['middleware' => 'auth'], function () use ($router) {
     // --- Rute khusus Super Admin saja ---
     $router->group(['middleware' => 'role:super-admin'], function () use ($router) {
         $router->post('/hotels', 'HotelController@store');
+
+        // Account Management
+        $router->get('/accounts', 'AccountController@index');
+        $router->get('/accounts/{id}', 'AccountController@show');
+        $router->put('/accounts/{id}', 'AccountController@update');
+        $router->delete('/accounts/{id}', 'AccountController@destroy');
     });
 
     // --- Rute untuk semua pengguna terautentikasi ---

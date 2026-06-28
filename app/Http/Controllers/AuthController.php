@@ -49,6 +49,7 @@ class AuthController extends BaseController
             return response()->json([
                 'message' => 'Login successful',
                 'user' => $user,
+                'role' => $user->role,
                 'token' => $token,
                 'token_type' => 'Bearer',
                 'expires_in' => $auth->factory()->getTTL() * 60
