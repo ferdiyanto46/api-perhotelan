@@ -39,11 +39,44 @@ class HotelController extends BaseController
     }
 
     /**
-     * Tampilkan detail hotel beserta tipe kamar dan kamar fisiknya.
+     * Overview untuk Super Admin.
+     * Menampilkan daftar hotel beserta alamat, jumlah kamar, dan admin yang bertanggung jawab.
      */
-    public function showById($id)
+    public function overview(Request $request)
     {
-        $hotel = Hotel::with(['roomTypes.rooms'])->findOrFail($id);
+        $hotels = Hotel::withCount(['roomTypes', 'rooms'])
+            ->with(['admins:id,name,email,hotel_id'])
+            ->paginate(10);
+
+        return response()->json($hotels);
+    }
+
+    /**
+     * Tampilkan detail hotel beserta tipe kamar dan kamar fisiknya yang tersedia.
+     * Query params opsional: ?check_in=2026-07-03&check_out=2026-07-05
+     */
+    public function showById(Request $request, $id)
+    {
+        $hotel = Hotel::findOrFail($id);
+
+        // Jika ada filter tanggal, ambil kamar yang kosong saja pada tanggal tersebut
+        if ($request->filled(['check_in', 'check_out'])) {
+            $this->validate($request, [
+                'check_in'  => 'date|date_format:Y-m-d',
+                'check_out' => 'date|date_format:Y-m-d|after:check_in',
+            ]);
+
+            $checkIn = $request->check_in;
+            $checkOut = $request->check_out;
+
+            $hotel->load(['roomTypes.rooms' => function ($query) use ($checkIn, $checkOut) {
+                // Gunakan scope availableForDates yang ada di model Room
+                $query->availableForDates($checkIn, $checkOut);
+            }]);
+        } else {
+            // Default: load semua kamar fisik tanpa filter tanggal
+            $hotel->load(['roomTypes.rooms']);
+        }
 
         return response()->json($hotel);
     }
@@ -73,9 +106,16 @@ class HotelController extends BaseController
         $imgUrl = null;
         if ($request->hasFile('image')) {
             $image     = $request->file('image');
-            $imageName = time() . '.' . $image->getClientOriginalExtension();
-            $path      = $image->storeAs('public/hotels', $imageName);
-            $imgUrl    = Storage::url($path);
+            $imageName = time() . '_' . uniqid() . '.' . $image->getClientOriginalExtension();
+            $destDir   = app()->basePath('public') . '/storage/hotels';
+
+            // Buat folder jika belum ada
+            if (!file_exists($destDir)) {
+                mkdir($destDir, 0755, true);
+            }
+
+            $image->move($destDir, $imageName);
+            $imgUrl = '/storage/hotels/' . $imageName;
         }
 
         $hotel = Hotel::create([
@@ -135,16 +175,27 @@ class HotelController extends BaseController
         }
 
         $imgUrl = $hotel->img_url;
-        if ($request->hasFile('image')) {
+
+        // Cek file gambar: bisa dari multipart/form-data (POST spoofing) atau PUT biasa
+        $imageFile = $request->file('image');
+        if ($imageFile) {
             // Hapus gambar lama jika ada
             if ($hotel->img_url) {
-                $oldImagePath = str_replace('/storage', 'public', $hotel->img_url);
-                Storage::delete($oldImagePath);
+                $oldPath = app()->basePath('public') . $hotel->img_url;
+                if (file_exists($oldPath)) {
+                    unlink($oldPath);
+                }
             }
-            $image     = $request->file('image');
-            $imageName = time() . '.' . $image->getClientOriginalExtension();
-            $path      = $image->storeAs('public/hotels', $imageName);
-            $imgUrl    = Storage::url($path);
+            $imageName = time() . '_' . uniqid() . '.' . $imageFile->getClientOriginalExtension();
+            $destDir   = app()->basePath('public') . '/storage/hotels';
+
+            // Buat folder jika belum ada
+            if (!file_exists($destDir)) {
+                mkdir($destDir, 0755, true);
+            }
+
+            $imageFile->move($destDir, $imageName);
+            $imgUrl = '/storage/hotels/' . $imageName;
         }
 
         $dataToUpdate            = $request->only(['name', 'city', 'address', 'description', 'rating']);

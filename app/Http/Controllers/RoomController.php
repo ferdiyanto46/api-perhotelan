@@ -17,12 +17,27 @@ class RoomController extends BaseController
     {
         $query = Room::with(['roomType.hotel']);
 
+        if ($request->filled(['check_in', 'check_out'])) {
+            $this->validate($request, [
+                'check_in'  => 'date|date_format:Y-m-d',
+                'check_out' => 'date|date_format:Y-m-d|after:check_in',
+            ]);
+            $query->availableForDates($request->check_in, $request->check_out);
+        }
+
         if ($request->filled('status')) {
             $query->where('status', $request->status);
         }
 
         if ($request->filled('room_type_id')) {
             $query->where('room_type_id', $request->room_type_id);
+        }
+
+        // Filter berdasarkan hotel_id
+        if ($request->filled('hotel_id')) {
+            $query->whereHas('roomType', function ($q) use ($request) {
+                $q->where('hotel_id', $request->hotel_id);
+            });
         }
 
         $rooms = $query->paginate(10);
@@ -50,7 +65,7 @@ class RoomController extends BaseController
             'status'       => 'required|in:available,occupied,maintenance',
             'description'  => 'nullable|string',
             'price'        => 'required|numeric|min:0',
-            'img_url'      => 'nullable|url',
+            'image'        => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
         ]);
 
         // Cek kepemilikan: admin hanya bisa tambah kamar di hotel miliknya
@@ -62,10 +77,29 @@ class RoomController extends BaseController
             ], 403);
         }
 
-        $room = Room::create($request->only([
-            'room_type_id', 'room_number', 'status',
-            'description', 'price', 'img_url',
-        ]));
+        // Proses upload gambar
+        $imgUrl = null;
+        if ($request->hasFile('image')) {
+            $image     = $request->file('image');
+            $imageName = time() . '_' . uniqid() . '.' . $image->getClientOriginalExtension();
+            $destDir   = app()->basePath('public') . '/storage/rooms';
+
+            if (!file_exists($destDir)) {
+                mkdir($destDir, 0755, true);
+            }
+
+            $image->move($destDir, $imageName);
+            $imgUrl = '/storage/rooms/' . $imageName;
+        }
+
+        $room = Room::create([
+            'room_type_id' => $request->room_type_id,
+            'room_number'  => $request->room_number,
+            'status'       => $request->status,
+            'description'  => $request->description,
+            'price'        => $request->price,
+            'img_url'      => $imgUrl,
+        ]);
 
         return response()->json([
             'message' => 'Room created successfully',
@@ -94,13 +128,35 @@ class RoomController extends BaseController
             'status'       => 'sometimes|required|in:available,occupied,maintenance',
             'description'  => 'nullable|string',
             'price'        => 'sometimes|required|numeric|min:0',
-            'img_url'      => 'nullable|url',
+            'image'        => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
         ]);
 
-        $room->update($request->only([
-            'room_type_id', 'room_number', 'status',
-            'description', 'price', 'img_url',
-        ]));
+        $dataToUpdate = $request->only([
+            'room_type_id', 'room_number', 'status', 'description', 'price',
+        ]);
+
+        // Proses upload gambar baru jika ada
+        $imageFile = $request->file('image');
+        if ($imageFile) {
+            // Hapus gambar lama jika ada
+            if ($room->img_url) {
+                $oldPath = app()->basePath('public') . $room->img_url;
+                if (file_exists($oldPath)) {
+                    unlink($oldPath);
+                }
+            }
+            $imageName              = time() . '_' . uniqid() . '.' . $imageFile->getClientOriginalExtension();
+            $destDir                = app()->basePath('public') . '/storage/rooms';
+
+            if (!file_exists($destDir)) {
+                mkdir($destDir, 0755, true);
+            }
+
+            $imageFile->move($destDir, $imageName);
+            $dataToUpdate['img_url'] = '/storage/rooms/' . $imageName;
+        }
+
+        $room->update($dataToUpdate);
 
         return response()->json([
             'message' => 'Room updated successfully',

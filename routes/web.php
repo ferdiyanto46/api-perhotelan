@@ -35,6 +35,7 @@ $router->group(['middleware' => 'auth'], function () use ($router) {
     // --- Rute khusus Admin & Super Admin ---
     $router->group(['middleware' => 'role:admin,super-admin'], function () use ($router) {
         $router->put('/hotels/{id}', 'HotelController@update');
+        $router->post('/hotels/{id}', 'HotelController@update'); // Alternatif untuk upload gambar (POST + _method spoofing)
         $router->delete('/hotels/{id}', 'HotelController@destroy');
 
         $router->post('/room-types', 'RoomTypeController@store');
@@ -43,12 +44,14 @@ $router->group(['middleware' => 'auth'], function () use ($router) {
 
         $router->post('/rooms', 'RoomController@store');
         $router->put('/rooms/{id}', 'RoomController@update');
+        $router->post('/rooms/{id}', 'RoomController@update'); // Alternatif untuk upload gambar (POST + _method spoofing)
         $router->delete('/rooms/{id}', 'RoomController@destroy');
     });
 
     // --- Rute khusus Super Admin saja ---
     $router->group(['middleware' => 'role:super-admin'], function () use ($router) {
         $router->post('/hotels', 'HotelController@store');
+        $router->get('/hotels/overview', 'HotelController@overview'); // Overview hotel untuk dashboard
 
         // Account Management
         $router->get('/accounts', 'AccountController@index');
@@ -59,6 +62,7 @@ $router->group(['middleware' => 'auth'], function () use ($router) {
 
     // --- Rute untuk semua pengguna terautentikasi ---
     $router->post('/bookings/checkout', 'BookingController@checkout');
+    $router->post('/bookings/{id}/pay', 'BookingController@retryPayment'); // Bayar ulang booking pending
     $router->get('/bookings', 'BookingController@index');
     $router->get('/bookings/{id}', 'BookingController@show');
 });

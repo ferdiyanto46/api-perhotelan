@@ -174,6 +174,106 @@ class BookingController extends BaseController
     }
 
     /**
+     * Retry pembayaran untuk booking yang masih pending.
+     * Membuat external_id baru dan meminta Snap Token baru dari Midtrans.
+     *
+     * Super Admin: bisa retry semua booking.
+     * Admin hotel: hanya booking di hotel miliknya.
+     * Customer: hanya booking miliknya sendiri.
+     */
+    public function retryPayment(Request $request, $id)
+    {
+        $user  = $request->user();
+        $query = Booking::with(['user', 'room.roomType.hotel', 'payment']);
+
+        if ($user->isSuperAdmin()) {
+            // Super Admin: akses semua booking
+        } elseif ($user->isAdmin()) {
+            // Admin hotel: hanya booking di hotel miliknya
+            $query->whereHas('room.roomType', function ($q) use ($user) {
+                $q->where('hotel_id', $user->hotel_id);
+            });
+        } else {
+            // Customer: hanya booking miliknya sendiri
+            $query->where('user_id', $user->id);
+        }
+
+        $booking = $query->findOrFail($id);
+
+        // Hanya booking dengan status pending yang bisa di-retry
+        if ($booking->status !== 'pending') {
+            return response()->json([
+                'message' => 'Booking ini tidak dapat dibayar ulang karena statusnya bukan pending',
+            ], 422);
+        }
+
+        $payment = $booking->payment;
+
+        if (!$payment) {
+            return response()->json([
+                'message' => 'Data pembayaran tidak ditemukan untuk booking ini',
+            ], 404);
+        }
+
+        // Buat external_id baru agar tidak konflik dengan transaksi sebelumnya di Midtrans
+        $newExternalId = 'BOOK-' . time() . '-' . $booking->id;
+        $payment->update([
+            'external_id' => $newExternalId,
+            'status'      => 'pending',
+        ]);
+
+        // ── Konfigurasi Midtrans ──────────────────────────────────────────────
+        \Midtrans\Config::$serverKey    = env('MIDTRANS_SERVER_KEY');
+        \Midtrans\Config::$isProduction = env('MIDTRANS_IS_PRODUCTION', false);
+        \Midtrans\Config::$isSanitized  = true;
+        \Midtrans\Config::$is3ds        = true;
+
+        // Gunakan data pemilik booking (bukan admin yang mengakses)
+        $bookingOwner = $booking->user;
+        $room         = $booking->room;
+        $nights       = $booking->nights;
+
+        // ── Buat parameter transaksi untuk Midtrans ───────────────────────────
+        $snapParams = [
+            'transaction_details' => [
+                'order_id'     => $newExternalId,
+                'gross_amount' => (int) $booking->total_price,
+            ],
+            'customer_details'    => [
+                'first_name' => $bookingOwner->name,
+                'email'      => $bookingOwner->email,
+            ],
+            'item_details'        => [
+                [
+                    'id'       => 'ROOM-' . $room->id,
+                    'price'    => (int) $room->price,
+                    'quantity' => $nights,
+                    'name'     => ($room->roomType->name ?? 'Kamar')
+                                  . ' - ' . ($room->roomType->hotel->name ?? ''),
+                ],
+            ],
+        ];
+
+        // ── Minta Snap Token baru ke server Midtrans ──────────────────────────
+        try {
+            $snapToken = \Midtrans\Snap::getSnapToken($snapParams);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message'    => 'Gagal mendapatkan token pembayaran dari Midtrans',
+                'booking'    => $booking->load(['user', 'room.roomType.hotel', 'payment']),
+                'snap_token' => null,
+                'error'      => $e->getMessage(),
+            ], 502);
+        }
+
+        return response()->json([
+            'message'    => 'Snap token berhasil dibuat, silakan lanjutkan pembayaran',
+            'booking'    => $booking->load(['user', 'room.roomType.hotel', 'payment']),
+            'snap_token' => $snapToken,
+        ]);
+    }
+
+    /**
      * Handle webhook notifikasi dari Midtrans.
      */
     public function handleNotification(Request $request)
